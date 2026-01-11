@@ -1,0 +1,188 @@
+trigger:
+  - main
+  - develop
+  - feature/*
+
+pr:
+  - main
+  - develop
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  goVersion: '1.21'
+  GOPATH: '$(System.DefaultWorkingDirectory)/go'
+  modulePath: '$(GOPATH)/src/github.com/$(Build.Repository.Name)'
+
+stages:
+  - stage: Test
+    displayName: 'Test & Coverage'
+    jobs:
+      - job: GoTest
+        displayName: 'Run Tests and Generate Coverage'
+        steps:
+          - task: GoTool@0
+            displayName: 'Use Go $(goVersion)'
+            inputs:
+              version: '$(goVersion)'
+
+          - task: Go@0
+            displayName: 'Run go test with coverage'
+            inputs:
+              command: 'test'
+              arguments: '-v -coverprofile=coverage.out -covermode=atomic ./...'
+              workingDirectory: '$(Build.SourcesDirectory)'
+
+          - task: PublishCodeCoverageResults@1
+            displayName: 'Publish code coverage'
+            inputs:
+              codeCoverageTool: 'Cobertura'
+              summaryFileLocation: '$(Build.SourcesDirectory)/coverage.out'
+
+          - script: |
+              go tool cover -html=$(Build.SourcesDirectory)/coverage.out -o $(Build.ArtifactStagingDirectory)/coverage.html
+            displayName: 'Generate HTML coverage report'
+            workingDirectory: '$(Build.SourcesDirectory)'
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish coverage report'
+            inputs:
+              pathToPublish: '$(Build.ArtifactStagingDirectory)'
+              artifactName: 'coverage-reports'
+              publishLocation: 'Container'
+
+  - stage: Build
+    displayName: 'Build Application'
+    dependsOn: Test
+    condition: succeeded()
+    jobs:
+      - job: GoBuild
+        displayName: 'Build Go Application'
+        steps:
+          - task: GoTool@0
+            displayName: 'Use Go $(goVersion)'
+            inputs:
+              version: '$(goVersion)'
+
+          - task: Go@0
+            displayName: 'Build for Linux'
+            inputs:
+              command: 'build'
+              arguments: '-o $(Build.ArtifactStagingDirectory)/notification-service-linux-amd64'
+              workingDirectory: '$(Build.SourcesDirectory)'
+            env:
+              GOOS: linux
+              GOARCH: amd64
+
+          - task: Go@0
+            displayName: 'Build for Windows'
+            inputs:
+              command: 'build'
+              arguments: '-o $(Build.ArtifactStagingDirectory)/notification-service-windows-amd64.exe'
+              workingDirectory: '$(Build.SourcesDirectory)'
+            env:
+              GOOS: windows
+              GOARCH: amd64
+
+          - task: Go@0
+            displayName: 'Build for macOS'
+            inputs:
+              command: 'build'
+              arguments: '-o $(Build.ArtifactStagingDirectory)/notification-service-darwin-amd64'
+              workingDirectory: '$(Build.SourcesDirectory)'
+            env:
+              GOOS: darwin
+              GOARCH: amd64
+
+          - script: |
+              mkdir -p $(Build.ArtifactStagingDirectory)/checksums
+              cd $(Build.ArtifactStagingDirectory)
+              sha256sum notification-service-* > checksums/SHA256SUMS
+              cat checksums/SHA256SUMS
+            displayName: 'Generate checksums'
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish binaries'
+            inputs:
+              pathToPublish: '$(Build.ArtifactStagingDirectory)'
+              artifactName: 'binaries'
+              publishLocation: 'Container'
+
+  - stage: Quality
+    displayName: 'Code Quality Analysis'
+    dependsOn: Test
+    condition: succeeded()
+    jobs:
+      - job: Lint
+        displayName: 'Run Go Linter'
+        steps:
+          - task: GoTool@0
+            displayName: 'Use Go $(goVersion)'
+            inputs:
+              version: '$(goVersion)'
+
+          - script: |
+              go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+            displayName: 'Install golangci-lint'
+
+          - script: |
+              $(GOPATH)/bin/golangci-lint run ./... --out-format github-actions
+            displayName: 'Run golangci-lint'
+            workingDirectory: '$(Build.SourcesDirectory)'
+            continueOnError: true
+
+  - stage: Benchmark
+    displayName: 'Performance Benchmarks'
+    dependsOn: Test
+    condition: succeeded()
+    jobs:
+      - job: RunBenchmarks
+        displayName: 'Run Go Benchmarks'
+        steps:
+          - task: GoTool@0
+            displayName: 'Use Go $(goVersion)'
+            inputs:
+              version: '$(goVersion)'
+
+          - script: |
+              go test -bench=. -benchmem -benchtime=10s -run=^$ ./... | tee $(Build.ArtifactStagingDirectory)/benchmark.txt
+            displayName: 'Run benchmarks'
+            workingDirectory: '$(Build.SourcesDirectory)'
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish benchmark results'
+            inputs:
+              pathToPublish: '$(Build.ArtifactStagingDirectory)'
+              artifactName: 'benchmarks'
+              publishLocation: 'Container'
+
+  - stage: Security
+    displayName: 'Security Scanning'
+    dependsOn: Test
+    condition: succeeded()
+    jobs:
+      - job: SecurityScan
+        displayName: 'Run Security Checks'
+        steps:
+          - task: GoTool@0
+            displayName: 'Use Go $(goVersion)'
+            inputs:
+              version: '$(goVersion)'
+
+          - script: |
+              go install github.com/securego/gosec/v2/cmd/gosec@latest
+            displayName: 'Install gosec'
+
+          - script: |
+              $(GOPATH)/bin/gosec -no-fail -fmt json -out $(Build.ArtifactStagingDirectory)/gosec-report.json ./...
+            displayName: 'Run security scan'
+            workingDirectory: '$(Build.SourcesDirectory)'
+            continueOnError: true
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish security report'
+            inputs:
+              pathToPublish: '$(Build.ArtifactStagingDirectory)'
+              artifactName: 'security-reports'
+              publishLocation: 'Container'

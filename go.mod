@@ -1,1 +1,3 @@
-go mod init notification-service
+module notification-service
+
+go 1.21

@@ -1,0 +1,27 @@
+# Binaries
+notification-service
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Coverage files
+coverage.out
+coverage.html
+*.coverprofile
+
+# Build artifacts
+/bin/
+/dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Go
+go.sum
+vendor/
